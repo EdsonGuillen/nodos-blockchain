@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nodo Blockchain 3</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+    header {
+      background: #1e293b;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #334155;
+    }
+    header h1 { font-size: 1.25rem; color: #38bdf8; }
+    header span { font-size: 0.8rem; color: #64748b; }
+
+    .container { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem; }
+
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    .card h2 { font-size: 1rem; color: #94a3b8; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    input, textarea {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #e2e8f0;
+      padding: 0.6rem 0.8rem;
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+      outline: none;
+    }
+    input:focus, textarea:focus { border-color: #38bdf8; }
+    textarea { resize: vertical; min-height: 80px; }
+
+    button {
+      background: #0ea5e9;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 0.6rem 1.2rem;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: background 0.2s;
+      width: 100%;
+      margin-top: 0.25rem;
+    }
+    button:hover { background: #38bdf8; }
+    button.danger { background: #dc2626; }
+    button.danger:hover { background: #ef4444; }
+    button.success { background: #16a34a; }
+    button.success:hover { background: #22c55e; }
+
+    .response {
+      margin-top: 0.75rem;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 0.75rem;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      min-height: 48px;
+      word-break: break-all;
+      white-space: pre-wrap;
+    }
+    .response.ok { border-color: #16a34a; color: #86efac; }
+    .response.error { border-color: #dc2626; color: #fca5a5; }
+
+    .chain-container { grid-column: 1 / -1; }
+    .block {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+      font-size: 0.8rem;
+    }
+    .block-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+    .block-index { color: #38bdf8; font-weight: bold; }
+    .block-hash { color: #64748b; font-size: 0.7rem; font-family: monospace; }
+    .block-body { color: #94a3b8; }
+    .block-body span { color: #e2e8f0; }
+
+    .stats {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .stat {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 1rem 1.5rem;
+      flex: 1;
+      text-align: center;
+    }
+    .stat-value { font-size: 2rem; font-weight: bold; color: #38bdf8; }
+    .stat-label { font-size: 0.75rem; color: #64748b; margin-top: 0.25rem; }
+
+    .empty { text-align: center; color: #475569; padding: 2rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>⛓ Nodo Blockchain 3</h1>
+  <span id="api-status">● Conectando...</span>
+</header>
+
+<div class="container">
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value" id="stat-bloques">-</div>
+      <div class="stat-label">Bloques en cadena</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="stat-nodo">8004</div>
+      <div class="stat-label">Puerto del nodo</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="stat-ultimo">-</div>
+      <div class="stat-label">Último hash (primeros 8)</div>
+    </div>
+  </div>
+
+  <div class="grid">
+
+    <!-- Nueva Transacción -->
+    <div class="card">
+      <h2>📤 Nueva Transacción</h2>
+      <input type="text" id="t-persona" placeholder="persona_id (UUID)" value="00000000-0000-0000-0000-000000000001">
+      <input type="text" id="t-institucion" placeholder="institucion_id (UUID)" value="00000000-0000-0000-0000-000000000001">
+      <input type="text" id="t-programa" placeholder="programa_id (UUID)" value="00000000-0000-0000-0000-000000000001">
+      <input type="text" id="t-titulo" placeholder="titulo_obtenido" value="Ingeniero en Sistemas">
+      <input type="date" id="t-fecha" value="2024-06-01">
+      <button onclick="crearTransaccion()">Enviar Transacción</button>
+      <div class="response" id="res-transaccion">Esperando...</div>
+    </div>
+
+    <!-- Minado y Consenso -->
+    <div class="card">
+      <h2>⛏ Minado y Red</h2>
+      <p style="font-size:0.8rem; color:#64748b; margin-bottom:1rem;">
+        Mina las transacciones pendientes o sincroniza con la cadena más larga del equipo.
+      </p>
+      <button class="success" onclick="minar()">⛏ Minar Bloque</button>
+      <div class="response" id="res-mine">Esperando...</div>
+
+      <br>
+      <button onclick="resolverConsenso()">🔄 Resolver Consenso</button>
+      <div class="response" id="res-consenso">Esperando...</div>
+    </div>
+
+    <!-- Registrar Nodo -->
+    <div class="card">
+      <h2>🌐 Registrar Nodo</h2>
+      <input type="text" id="nodo-url" placeholder="http://IP:PUERTO">
+      <button onclick="registrarNodo()">Registrar</button>
+      <div class="response" id="res-nodo">Esperando...</div>
+    </div>
+
+    <!-- Refrescar cadena -->
+    <div class="card">
+      <h2>🔍 Estado de la Cadena</h2>
+      <p style="font-size:0.8rem; color:#64748b; margin-bottom:1rem;">
+        Consulta el estado actual de la cadena en este nodo.
+      </p>
+      <button onclick="cargarCadena()">Refrescar Cadena</button>
+      <div class="response" id="res-chain">Esperando...</div>
+    </div>
+
+    <!-- Cadena completa -->
+    <div class="card chain-container">
+      <h2>📦 Bloques en la Cadena</h2>
+      <div id="bloques"><div class="empty">Presiona "Refrescar Cadena" para ver los bloques</div></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const API = 'http://localhost:8004/api';
+
+  async function api(method, endpoint, body = null) {
+    try {
+      const opts = { method, headers: { 'Content-Type': 'application/json' } };
+      if (body) opts.body = JSON.stringify(body);
+      const res = await fetch(API + endpoint, opts);
+      return { ok: res.ok, data: await res.json() };
+    } catch (e) {
+      return { ok: false, data: { error: e.message } };
+    }
+  }
+
+  function setRes(id, result) {
+    const el = document.getElementById(id);
+    el.textContent = JSON.stringify(result.data, null, 2);
+    el.className = 'response ' + (result.ok ? 'ok' : 'error');
+  }
+
+  async function crearTransaccion() {
+    const body = {
+      persona_id:     document.getElementById('t-persona').value,
+      institucion_id: document.getElementById('t-institucion').value,
+      programa_id:    document.getElementById('t-programa').value,
+      titulo_obtenido: document.getElementById('t-titulo').value,
+      fecha_fin:      document.getElementById('t-fecha').value,
+      firmado_por:    'nodo-3'
+    };
+    const r = await api('POST', '/transactions', body);
+    setRes('res-transaccion', r);
+  }
+
+  async function minar() {
+    const r = await api('POST', '/mine');
+    setRes('res-mine', r);
+    if (r.ok) cargarCadena();
+  }
+
+  async function resolverConsenso() {
+    const r = await api('GET', '/nodes/resolve');
+    setRes('res-consenso', r);
+    if (r.ok) cargarCadena();
+  }
+
+  async function registrarNodo() {
+    const url = document.getElementById('nodo-url').value;
+    const r = await api('POST', '/nodes/register', { url });
+    setRes('res-nodo', r);
+  }
+
+  async function cargarCadena() {
+    const r = await api('GET', '/chain');
+    setRes('res-chain', { ok: r.ok, data: { longitud: r.data.longitud } });
+
+    document.getElementById('stat-bloques').textContent = r.data.longitud ?? '-';
+
+    const chain = r.data.chain ?? [];
+    const ultimo = chain[chain.length - 1];
+    document.getElementById('stat-ultimo').textContent =
+      ultimo ? ultimo.hash_actual.substring(0, 8) : '-';
+
+    const contenedor = document.getElementById('bloques');
+    if (!chain.length) {
+      contenedor.innerHTML = '<div class="empty">No hay bloques aún</div>';
+      return;
+    }
+
+    contenedor.innerHTML = chain.map((b, i) => `
+      <div class="block">
+        <div class="block-header">
+          <span class="block-index">Bloque #${i + 1}</span>
+          <span class="block-hash">hash: ${b.hash_actual}</span>
+        </div>
+        <div class="block-body">
+          🎓 <span>${b.titulo_obtenido ?? '-'}</span> &nbsp;|&nbsp;
+          📅 <span>${b.fecha_fin ?? '-'}</span> &nbsp;|&nbsp;
+          🔢 nonce: <span>${b.nonce}</span> &nbsp;|&nbsp;
+          ✍️ <span>${b.firmado_por ?? '-'}</span>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // Verificar conexión al cargar
+  async function init() {
+    const r = await api('GET', '/chain');
+    const statusEl = document.getElementById('api-status');
+    if (r.ok) {
+      statusEl.textContent = '● Conectado';
+      statusEl.style.color = '#22c55e';
+      cargarCadena();
+    } else {
+      statusEl.textContent = '● Sin conexión';
+      statusEl.style.color = '#ef4444';
+    }
+  }
+
+  init();
+  setInterval(cargarCadena, 10000); // refresca cada 10 segundos
+</script>
+
+</body>
+</html>
