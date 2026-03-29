@@ -14,6 +14,36 @@ use Illuminate\Support\Str;
 class BlockchainController extends Controller
 {
     // ── Insertar bloque saltando FK ───────────────────────────────────────────
+    private function asegurarGenesis(): void
+{
+    if (DB::table('grados')->count() > 0) return;
+
+    $genesis = [
+        'persona_id'      => '00000000-0000-0000-0000-000000000000',
+        'institucion_id'  => '00000000-0000-0000-0000-000000000000',
+        'programa_id'     => '00000000-0000-0000-0000-000000000000',
+        'titulo_obtenido' => 'Bloque Genesis - Red Blockchain',
+        'fecha_fin'       => '2024-01-01',
+        'hash_anterior'   => str_repeat('0', 64),
+        'firmado_por'     => config('app.url'),
+    ];
+
+    $resultado = Grado::minar(
+        $genesis['persona_id'],
+        $genesis['institucion_id'],
+        $genesis['titulo_obtenido'],
+        $genesis['fecha_fin'],
+        $genesis['hash_anterior']
+    );
+
+    $this->insertarBloque(array_merge($genesis, [
+        'hash_actual'   => $resultado['hash'],
+        'hash_anterior' => $genesis['hash_anterior'],
+        'nonce'         => $resultado['nonce'],
+    ]));
+
+    Log::info('[Genesis] Bloque génesis creado: ' . $resultado['hash']);
+}
     private function insertarBloque(array $datos): Grado
     {
         $id = (string) Str::uuid();
