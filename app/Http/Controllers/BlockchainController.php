@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Http\Controllers;
+use OpenApi\Attributes as OA;
 
 use App\Models\Grado;
 use App\Models\TransaccionPendiente;
@@ -27,6 +28,26 @@ class BlockchainController extends Controller
     }
 
     // ── GET /chain ────────────────────────────────────────────────────────────
+    /**
+ * @OA\Get(
+ *     path="/chain",
+ *     summary="Obtener la cadena completa",
+ *     tags={"Blockchain"},
+ *     @OA\Response(
+ *         response=200,
+ *         description="Cadena de bloques",
+ *         @OA\JsonContent(
+ *             @OA\Property(property="node_id", type="string", example="http://10.158.86.29:8004"),
+ *             @OA\Property(property="longitud", type="integer", example=3),
+ *             @OA\Property(property="length", type="integer", example=3),
+ *             @OA\Property(property="chain", type="array", @OA\Items(type="object"))
+ *         )
+ *     )
+ * )
+ */
+#[OA\Get(path: '/chain', summary: 'Obtener cadena completa', tags: ['Blockchain'],
+    responses: [new OA\Response(response: 200, description: 'Cadena de bloques')]
+)]
     public function chain()
     {
         $cadena = Grado::orderBy('creado_en')->get();
@@ -39,6 +60,21 @@ class BlockchainController extends Controller
     }
 
     // ── POST /mine ────────────────────────────────────────────────────────────
+    /**
+ * @OA\Post(
+ *     path="/mine",
+ *     summary="Minar un bloque pendiente",
+ *     tags={"Blockchain"},
+ *     @OA\Response(response=200, description="Bloque minado exitosamente"),
+ *     @OA\Response(response=400, description="No hay transacciones pendientes")
+ * )
+ */
+#[OA\Post(path: '/mine', summary: 'Minar bloque pendiente', tags: ['Blockchain'],
+    responses: [
+        new OA\Response(response: 200, description: 'Bloque minado'),
+        new OA\Response(response: 400, description: 'Sin transacciones pendientes')
+    ]
+)]
     public function mine()
 {
     $this->asegurarGenesis();
@@ -151,6 +187,28 @@ class BlockchainController extends Controller
 }
 
     // ── POST /blocks/receive ──────────────────────────────────────────────────
+    /**
+ * @OA\Post(
+ *     path="/blocks/receive",
+ *     summary="Recibir bloque de otro nodo",
+ *     tags={"Blockchain"},
+ *     @OA\RequestBody(
+ *         @OA\JsonContent(
+ *             @OA\Property(property="hash_actual", type="string"),
+ *             @OA\Property(property="hash_anterior", type="string"),
+ *             @OA\Property(property="nonce", type="integer"),
+ *             @OA\Property(property="persona_id", type="string"),
+ *             @OA\Property(property="titulo_obtenido", type="string"),
+ *             @OA\Property(property="fecha_fin", type="string")
+ *         )
+ *     ),
+ *     @OA\Response(response=200, description="Bloque aceptado"),
+ *     @OA\Response(response=400, description="Bloque inválido")
+ * )
+ */
+#[OA\Post(path: '/blocks/receive', summary: 'Recibir bloque de otro nodo', tags: ['Blockchain'],
+    responses: [new OA\Response(response: 200, description: 'Bloque aceptado')]
+)]
     public function receiveBlock(Request $request)
     {
         $datos = $request->all();

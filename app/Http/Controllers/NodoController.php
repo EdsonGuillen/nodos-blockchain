@@ -12,6 +12,20 @@ use Illuminate\Support\Facades\Log;
 class NodoController extends Controller
 {
     // ── POST /nodes/register ──────────────────────────────────────────────────
+    /**
+ * @OA\Post(
+ *     path="/nodes/register",
+ *     summary="Registrar nodos en la red",
+ *     tags={"Nodos"},
+ *     @OA\RequestBody(
+ *         @OA\JsonContent(
+ *             @OA\Property(property="url", type="string", example="http://10.158.86.67:8003"),
+ *             @OA\Property(property="nodes", type="array", @OA\Items(type="string"))
+ *         )
+ *     ),
+ *     @OA\Response(response=200, description="Nodos registrados")
+ * )
+ */
     public function register(Request $request)
     {
         $urls = $request->input('nodes') ?? [$request->input('url')];
@@ -44,6 +58,14 @@ class NodoController extends Controller
     }
 
     // ── GET /nodes/resolve ────────────────────────────────────────────────────
+    /**
+ * @OA\Get(
+ *     path="/nodes/resolve",
+ *     summary="Resolver conflictos — cadena más larga",
+ *     tags={"Nodos"},
+ *     @OA\Response(response=200, description="Consenso resuelto")
+ * )
+ */
     public function resolve()
     {
         $nodos         = DB::table('nodos')->get();

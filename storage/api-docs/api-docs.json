@@ -1,0 +1,74 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "Nodo Blockchain API - Grados Académicos",
+        "description": "API REST para nodo de red blockchain distribuida.",
+        "version": "1.0.0"
+    },
+    "servers": [
+        {
+            "url": "http://10.158.86.29:8004",
+            "description": "Nodo Laravel - ZeroTier"
+        },
+        {
+            "url": "http://localhost:8004",
+            "description": "Nodo Laravel - Local"
+        },
+        {
+            "url": "/api"
+        }
+    ],
+    "paths": {
+        "/chain": {
+            "get": {
+                "tags": [
+                    "Blockchain"
+                ],
+                "summary": "Obtener cadena completa",
+                "operationId": "c928152df4768b6704537de8b32373df",
+                "responses": {
+                    "200": {
+                        "description": "Cadena de bloques"
+                    }
+                }
+            }
+        },
+        "/mine": {
+            "post": {
+                "tags": [
+                    "Blockchain"
+                ],
+                "summary": "Minar bloque pendiente",
+                "operationId": "e968987e86d7dab536895ebae181dffb",
+                "responses": {
+                    "200": {
+                        "description": "Bloque minado"
+                    },
+                    "400": {
+                        "description": "Sin transacciones pendientes"
+                    }
+                }
+            }
+        },
+        "/blocks/receive": {
+            "post": {
+                "tags": [
+                    "Blockchain"
+                ],
+                "summary": "Recibir bloque de otro nodo",
+                "operationId": "f84689fff0acc4e03afbeb4a09f656a5",
+                "responses": {
+                    "200": {
+                        "description": "Bloque aceptado"
+                    }
+                }
+            }
+        }
+    },
+    "tags": [
+        {
+            "name": "Blockchain",
+            "description": "Blockchain"
+        }
+    ]
+}

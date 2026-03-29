@@ -10,7 +10,26 @@ use Illuminate\Support\Facades\DB;
 
 class TransaccionController extends Controller
 {
-    public function store(Request $request)
+/**
+ * @OA\Post(
+ *     path="/transactions",
+ *     summary="Crear y propagar una transacción",
+ *     tags={"Transacciones"},
+ *     @OA\RequestBody(
+ *         @OA\JsonContent(
+ *             required={"persona_id","institucion_id","titulo_obtenido","fecha_fin"},
+ *             @OA\Property(property="persona_id", type="string", format="uuid"),
+ *             @OA\Property(property="institucion_id", type="string", format="uuid"),
+ *             @OA\Property(property="programa_id", type="string", format="uuid"),
+ *             @OA\Property(property="titulo_obtenido", type="string", example="Ingeniero en Sistemas"),
+ *             @OA\Property(property="fecha_fin", type="string", format="date", example="2024-06-01")
+ *         )
+ *     ),
+ *     @OA\Response(response=201, description="Transacción guardada y propagada"),
+ *     @OA\Response(response=400, description="Campos requeridos faltantes")
+ * )
+ */    
+public function store(Request $request)
     {
         $datos = $this->normalizar($request->all());
 
