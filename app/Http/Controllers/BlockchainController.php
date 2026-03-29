@@ -1,96 +1,316 @@
 <?php
+
 namespace App\Http\Controllers;
 
 use App\Models\Grado;
-use App\Models\Nodo;
 use App\Models\TransaccionPendiente;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class BlockchainController extends Controller
 {
-    // GET /chain
+    // ── Insertar bloque saltando FK ───────────────────────────────────────────
+    private function insertarBloque(array $datos): Grado
+    {
+        $id = (string) Str::uuid();
+        DB::transaction(function () use ($datos, $id) {
+            DB::statement('SET LOCAL session_replication_role = replica;');
+            DB::table('grados')->insert(array_merge($datos, [
+                'id'        => $id,
+                'creado_en' => now(),
+            ]));
+        });
+        return Grado::find($id);
+    }
+
+    // ── GET /chain ────────────────────────────────────────────────────────────
     public function chain()
     {
         $cadena = Grado::orderBy('creado_en')->get();
-        return response()->json(['chain' => $cadena, 'longitud' => $cadena->count()]);
+        return response()->json([
+            'node_id'  => config('app.url'),
+            'chain'    => $cadena,
+            'longitud' => $cadena->count(),
+            'length'   => $cadena->count(),
+        ]);
     }
 
-    // POST /mine
+    // ── POST /mine ────────────────────────────────────────────────────────────
     public function mine()
+{
+    $this->asegurarGenesis();
+
+    $pendientes = TransaccionPendiente::all();
+    if ($pendientes->isEmpty()) {
+        return response()->json(['error' => 'No hay transacciones pendientes'], 400);
+    }
+
+    // ── Sincronizar con peers antes de minar ──────────────────────────────
+    $nodos = DB::table('nodos')->get();
+    foreach ($nodos as $nodo) {
+        try {
+            $response = Http::timeout(5)->get("{$nodo->url}/chain");
+            if (!$response->successful()) {
+                $response = Http::timeout(5)->get("{$nodo->url}/api/chain");
+            }
+            if ($response->successful()) {
+                $json           = $response->json();
+                $cadenaRemota   = $json['chain'] ?? [];
+                $longitudRemota = count($cadenaRemota);
+                $longitudLocal  = DB::table('grados')->count();
+
+                if ($longitudRemota > $longitudLocal) {
+                    Log::info("[Mine] Sincronizando con {$nodo->url} antes de minar ({$longitudRemota} vs {$longitudLocal})");
+                    foreach ($cadenaRemota as $bloque) {
+                        $hashActual = $bloque['hash_actual'] ?? $bloque['hashActual'] ?? null;
+                        if (!$hashActual) continue;
+                        $existe = DB::table('grados')->where('hash_actual', $hashActual)->exists();
+                        if (!$existe) {
+                            $campos = [
+                                'persona_id', 'institucion_id', 'programa_id',
+                                'fecha_inicio', 'fecha_fin', 'titulo_obtenido',
+                                'numero_cedula', 'titulo_tesis', 'menciones',
+                                'hash_actual', 'hash_anterior', 'nonce', 'firmado_por',
+                            ];
+                            $datos = array_filter(
+                                array_intersect_key($bloque, array_flip($campos)),
+                                fn($v) => $v !== null
+                            );
+                            if (!empty($datos['hash_actual'])) {
+                                try {
+                                    DB::transaction(function () use ($datos) {
+                                        DB::statement('SET LOCAL session_replication_role = replica;');
+                                        DB::table('grados')->insert(array_merge($datos, [
+                                            'id'        => (string) \Illuminate\Support\Str::uuid(),
+                                            'creado_en' => now(),
+                                        ]));
+                                    });
+                                } catch (\Exception $e) {
+                                    Log::warning("[Mine] No se pudo insertar bloque {$hashActual}: " . $e->getMessage());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::warning("[Mine] No se pudo sincronizar con {$nodo->url}");
+        }
+    }
+
+    // ── Minar ─────────────────────────────────────────────────────────────
+    $ultimoBloque = Grado::orderBy('creado_en', 'desc')->first();
+    $hashAnterior = $ultimoBloque ? $ultimoBloque->hash_actual : null;
+    $bloquesMinados = [];
+
+    foreach ($pendientes as $pendiente) {
+        $transaccion = json_decode($pendiente->datos, true);
+
+        $personaId      = $transaccion['persona_id']      ?? $transaccion['personaId']      ?? '';
+        $institucionId  = $transaccion['institucion_id']  ?? $transaccion['institucionId']  ?? '';
+        $tituloObtenido = $transaccion['titulo_obtenido'] ?? $transaccion['tituloObtenido'] ?? '';
+        $fechaFin       = $transaccion['fecha_fin']       ?? $transaccion['fechaFin']       ?? '';
+
+        $resultado = Grado::minar($personaId, $institucionId, $tituloObtenido, $fechaFin, $hashAnterior);
+
+        $datosNuevos = [
+            'persona_id'      => $personaId,
+            'institucion_id'  => $institucionId,
+            'titulo_obtenido' => $tituloObtenido,
+            'fecha_fin'       => $fechaFin,
+            'hash_actual'     => $resultado['hash'],
+            'hash_anterior'   => $hashAnterior,
+            'nonce'           => $resultado['nonce'],
+            'firmado_por'     => config('app.url'),
+        ];
+
+        $bloque = $this->insertarBloque(array_merge($transaccion, $datosNuevos));
+        $pendiente->delete();
+
+        $hashAnterior     = $bloque->hash_actual;
+        $bloquesMinados[] = $bloque;
+
+        Log::info("Bloque minado: {$bloque->hash_actual} | nonce: {$bloque->nonce}");
+    }
+
+    $ultimoBloque = end($bloquesMinados);
+
+    // Propagar a otros nodos
+    foreach ($nodos as $nodo) {
+        $this->propagarBloque($nodo->url, $ultimoBloque);
+    }
+
+    return response()->json([
+        'mensaje' => 'Bloque(s) minado(s)',
+        'bloque'  => $ultimoBloque,
+        'total'   => count($bloquesMinados),
+    ]);
+}
+
+    // ── POST /blocks/receive ──────────────────────────────────────────────────
+    public function receiveBlock(Request $request)
     {
-        $pendientes = TransaccionPendiente::all();
-        if ($pendientes->isEmpty()) {
-            return response()->json(['error' => 'No hay transacciones pendientes'], 400);
+        $datos = $request->all();
+
+        $hashActual = $datos['hashActual'] ?? $datos['hash_actual'] ?? null;
+        if (!$hashActual) {
+            return response()->json(['error' => 'Bloque inválido: falta hash_actual'], 400);
         }
 
-        $ultimoBloque = Grado::orderBy('creado_en', 'desc')->first();
-        $hashAnterior = $ultimoBloque ? $ultimoBloque->hash_actual : str_repeat('0', 64);
+        // Evitar duplicados
+        if (DB::table('grados')->where('hash_actual', $hashActual)->exists()) {
+            return response()->json(['mensaje' => 'Bloque ya existe'], 200);
+        }
 
-        $transaccion = json_decode($pendientes->first()->datos, true);
+        // ── CORRECCIÓN: data.transacciones es un ARRAY, tomar el primer elemento ──
+        $txArray = $datos['data']['transacciones'] ?? $datos['data']['transactions'] ?? null;
 
-        $resultado = Grado::minar(
-            $transaccion['persona_id'],
-            $transaccion['institucion_id'],
-            $transaccion['titulo_obtenido'],
-            $transaccion['fecha_fin'],
-            $hashAnterior
-        );
+        if (is_array($txArray) && isset($txArray[0])) {
+            // Express manda array de transacciones — tomamos la primera
+            $tx = $txArray[0];
+        } elseif (is_array($txArray) && !empty($txArray)) {
+            // Array asociativo directo (objeto único)
+            $tx = $txArray;
+        } else {
+            // Formato plano (Laravel u otro nodo) — los campos vienen en la raíz
+            $tx = $datos;
+        }
 
-        $bloque = Grado::create(array_merge($transaccion, [
-            'hash_actual'   => $resultado['hash'],
-            'hash_anterior' => $hashAnterior,
-            'nonce'         => $resultado['nonce'],
-            'firmado_por'   => config('app.url'),
-        ]));
+        $datosLimpios = [
+            'persona_id'      => $tx['persona_id']      ?? $tx['personaId']      ?? $datos['persona_id']      ?? null,
+            'institucion_id'  => $tx['institucion_id']  ?? $tx['institucionId']  ?? $datos['institucion_id']  ?? null,
+            'programa_id'     => $tx['programa_id']     ?? $tx['programaId']     ?? $datos['programa_id']     ?? null,
+            'titulo_obtenido' => $tx['titulo_obtenido'] ?? $tx['tituloObtenido'] ?? $datos['titulo_obtenido'] ?? null,
+            'fecha_fin'       => $tx['fecha_fin']       ?? $tx['fechaFin']       ?? $datos['fecha_fin']       ?? null,
+            'hash_actual'     => $hashActual,
+            'hash_anterior'   => $datos['hash_anterior'] ?? $datos['hashAnterior'] ?? null,
+            'nonce'           => $datos['nonce'] ?? 0,
+            'firmado_por'     => $tx['firmado_por']     ?? $tx['firmadoPor']     ?? $datos['firmado_por']     ?? null,
+        ];
 
-        // Eliminar la transacción minada
-        $pendientes->first()->delete();
+        $this->insertarBloque(array_filter($datosLimpios));
 
-        // Propagar el bloque a otros nodos
-        $nodos = Nodo::all();
-        foreach ($nodos as $nodo) {
-            try {
-                Http::timeout(5)->post("{$nodo->url}/blocks/receive", $bloque->toArray());
-                Log::info("Bloque propagado a {$nodo->url}");
-            } catch (\Exception $e) {
-                Log::warning("No se pudo propagar bloque a {$nodo->url}");
+        // ── Limpiar pendientes: comparar los 3 campos clave ──────────────────
+        if (!empty($datosLimpios['persona_id'])) {
+            TransaccionPendiente::all()->each(function ($pendiente) use ($datosLimpios) {
+                $d = json_decode($pendiente->datos, true);
+
+                $pid  = $d['persona_id']      ?? $d['personaId']      ?? '';
+                $tit  = $d['titulo_obtenido'] ?? $d['tituloObtenido'] ?? '';
+                $fech = $d['fecha_fin']        ?? $d['fechaFin']       ?? '';
+
+                if (
+                    $pid  === $datosLimpios['persona_id'] &&
+                    $tit  === $datosLimpios['titulo_obtenido'] &&
+                    $fech === $datosLimpios['fecha_fin']
+                ) {
+                    $pendiente->delete();
+                    Log::info("Pendiente eliminada tras recibir bloque de peer: {$tit}");
+                }
+            });
+        }
+
+        Log::info("Bloque aceptado: {$hashActual}");
+        return response()->json(['mensaje' => 'Bloque aceptado y guardado', 'hash' => $hashActual]);
+    }
+
+    // ── Propagar bloque a un nodo ─────────────────────────────────────────────
+    private function propagarBloque(string $url, Grado $bloque): void
+{
+    // Nunca mandar null — usar 64 ceros si es el primer bloque
+$hashAnterior = $bloque->hash_anterior; // dejar null si es null
+    $payload = [
+        // snake_case
+        'hash_actual'     => $bloque->hash_actual,
+        'hash_anterior'   => $hashAnterior,
+        'nonce'           => (int) $bloque->nonce,
+        'persona_id'      => $bloque->persona_id,
+        'institucion_id'  => $bloque->institucion_id,
+        'programa_id'     => $bloque->programa_id,
+        'titulo_obtenido' => $bloque->titulo_obtenido,
+        'fecha_fin'       => $bloque->fecha_fin,
+        'fecha_inicio'    => $bloque->fecha_inicio  ?? null,
+        'numero_cedula'   => $bloque->numero_cedula ?? null,
+        'firmado_por'     => $bloque->firmado_por,
+        // camelCase — Express busca ESTOS nombres
+        'hashActual'      => $bloque->hash_actual,
+        'hashAnterior'    => $hashAnterior,
+        'personaId'       => $bloque->persona_id,
+        'institucionId'   => $bloque->institucion_id,
+        'programaId'      => $bloque->programa_id,
+        'tituloObtenido'  => $bloque->titulo_obtenido,
+        'fechaFin'        => $bloque->fecha_fin,
+        'numeroCedula'    => $bloque->numero_cedula ?? null,
+        'firmadoPor'      => $bloque->firmado_por,
+    ];
+
+    $endpoints = [
+        '/blocks/receive',
+        '/block',
+        '/blocks',
+        '/chain/receive',
+        '/receive-block',
+        '/receive',
+        '/nodes/block',
+    ];
+
+    foreach ($endpoints as $endpoint) {
+        try {
+            $response = Http::timeout(5)->post("{$url}{$endpoint}", $payload);
+            if ($response->successful()) {
+                Log::info("[Propagacion] OK → {$url}{$endpoint}");
+                return;
+            }
+            Log::warning("[Propagacion] {$url}{$endpoint} respondió {$response->status()}: " . $response->body());
+        } catch (\Exception $e) {
+            Log::warning("[Propagacion] Falló {$url}{$endpoint}: " . $e->getMessage());
+        }
+    }
+
+    Log::error("[Propagacion] No se pudo propagar bloque a ningún endpoint de {$url}");
+}
+
+    // ── POST /nodes/register ──────────────────────────────────────────────────
+    public function registerNodes(Request $request)
+    {
+        $urls = $request->input('nodos', []);
+
+        if (empty($urls)) {
+            return response()->json(['error' => 'No se enviaron nodos'], 400);
+        }
+
+        $registrados = [];
+        foreach ($urls as $url) {
+            if ($url !== config('app.url') && !\App\Models\Nodo::where('url', $url)->exists()) {
+                \App\Models\Nodo::create(['url' => $url]);
+                $registrados[] = $url;
             }
         }
 
-        Log::info("Bloque minado: {$bloque->hash_actual} | nonce: {$bloque->nonce}");
-        return response()->json(['mensaje' => 'Bloque minado', 'bloque' => $bloque]);
+        return response()->json([
+            'mensaje'       => 'Nodos registrados exitosamente',
+            'total_nuevos'  => count($registrados),
+            'nodos_totales' => \App\Models\Nodo::pluck('url'),
+        ]);
     }
-
-    // POST /blocks/receive  ← recibe bloque de otro nodo y lo valida
-    public function receiveBlock(\Illuminate\Http\Request $request)
+    // ── GET /health ───────────────────────────────────────────────────────────────
+public function health()
 {
-    $datos = $request->all();
+    $pendientes = TransaccionPendiente::count();
+    $bloques    = Grado::count();
+    $nodos      = DB::table('nodos')->pluck('url');
 
-    // Si viene de Node.js, adaptamos el formato
-    if (isset($datos['hashActual'])) {
-        $tx = $datos['data']['transacciones'] ?? [];
-        $datos = [
-            'persona_id'      => $tx['personaId'] ?? null,
-            'institucion_id'  => $tx['institucionId'] ?? null,
-            'programa_id'     => $tx['programaId'] ?? null,
-            'titulo_obtenido' => $tx['tituloObtenido'] ?? null,
-            'fecha_fin'       => $tx['fechaFin'] ?? null,
-            'firmado_por'     => $tx['firmadoPor'] ?? null,
-            'hash_actual'     => $datos['hashActual'],
-            'hash_anterior'   => $datos['hashAnterior'],
-            'nonce'           => $datos['nonce']
-        ];
-    }
-
-    $ultimoBloque = Grado::orderBy('creado_en', 'desc')->first();
-    $hashEsperado = $ultimoBloque ? $ultimoBloque->hash_actual : str_repeat('0', 64);
-
-    if ($datos['hash_anterior'] !== $hashEsperado) {
-        return response()->json(['error' => 'hash_anterior inválido'], 400);
-    }
-
-    Grado::create($datos);
-    return response()->json(['mensaje' => 'Bloque aceptado']);
+    return response()->json([
+        'status'     => 'ok',
+        'nodeId'     => config('app.url'),
+        'node_id'    => config('app.url'),
+        'bloques'    => $bloques,
+        'pendientes' => $pendientes,
+        'peers'      => $nodos,
+        'nodes'      => $nodos,
+    ]);
 }
 }

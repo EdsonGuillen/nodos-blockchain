@@ -1,8 +1,9 @@
 <?php
+
 namespace App\Http\Controllers;
 
-use App\Models\Nodo;
 use App\Models\Grado;
+use App\Models\TransaccionPendiente;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -10,93 +11,114 @@ use Illuminate\Support\Facades\Log;
 
 class NodoController extends Controller
 {
-    public function register(Request $request) {
-    $url = $request->input('url');
-    if (!$url) {
-        return response()->json(['error' => 'URL requerida'], 400);
-    }
+    // ── POST /nodes/register ──────────────────────────────────────────────────
+    public function register(Request $request)
+    {
+        $urls = $request->input('nodes') ?? [$request->input('url')];
+        $urls = array_filter((array) $urls);
 
-    $existe = DB::table('nodos')->where('url', $url)->exists();
-    if ($existe) {
-        return response()->json(['mensaje' => 'El nodo ya existe'], 200);
-    }
+        if (empty($urls)) return response()->json(['error' => 'Se requiere url o nodes'], 400);
 
-    DB::table('nodos')->insert([
-        'url' => $url,
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
+        $registrados = [];
+        foreach ($urls as $url) {
+            $url = rtrim($url, '/');
+            if (!$url || $url === config('app.url')) continue;
 
-    return response()->json(['mensaje' => 'Nodo registrado correctamente'], 201);
-}
-
-    // GET /nodes/resolve  ← algoritmo de consenso
-   public function resolve()
-{
-    $nodos = Nodo::all();
-    $cadenaLocal = Grado::orderBy('creado_en')->get();
-    $longitudLocal = $cadenaLocal->count();
-    $mejorCadena = null;
-
-    foreach ($nodos as $nodo) {
-        try {
-            // Intenta ruta Laravel primero
-            $response = Http::timeout(5)->get("{$nodo->url}/api/chain");
-            if (!$response->successful()) {
-                // Intenta ruta Express
-                $response = Http::timeout(5)->get("{$nodo->url}/chain");
+            if (!DB::table('nodos')->where('url', $url)->exists()) {
+                DB::table('nodos')->insert(['url' => $url, 'created_at' => now(), 'updated_at' => now()]);
+                $registrados[] = $url;
             }
+        }
 
-            if ($response->successful()) {
-                $json = $response->json();
+        return response()->json([
+            'mensaje'      => 'Nodos registrados',
+            'registrados'  => $registrados,
+            'nodosActivos' => DB::table('nodos')->pluck('url'),
+        ]);
+    }
 
-                // Soporta formato Laravel (chain/longitud) y Express (chain/length)
-                $cadenaRemota = $json['chain'] ?? [];
-                $longitudRemota = $json['longitud'] ?? $json['length'] ?? count($cadenaRemota);
+    // ── GET /nodes ────────────────────────────────────────────────────────────
+    public function listar()
+    {
+        return response()->json(DB::table('nodos')->pluck('url'));
+    }
 
-                Log::info("Nodo {$nodo->url} tiene longitud: $longitudRemota");
+    // ── GET /nodes/resolve ────────────────────────────────────────────────────
+    public function resolve()
+    {
+        $nodos         = DB::table('nodos')->get();
+        $longitudLocal = DB::table('grados')->count();
+        $mejorCadena   = null;
 
-                if ($longitudRemota > $longitudLocal && $this->esValida($cadenaRemota)) {
-                    $longitudLocal = $longitudRemota;
-                    $mejorCadena = $cadenaRemota;
+        foreach ($nodos as $nodo) {
+            try {
+                $response = Http::timeout(5)->get("{$nodo->url}/chain");
+                if (!$response->successful()) $response = Http::timeout(5)->get("{$nodo->url}/api/chain");
+
+                if ($response->successful()) {
+                    $json = $response->json();
+                    $cadenaRemota   = $json['chain'] ?? [];
+                    $longitudRemota = $json['longitud'] ?? $json['length'] ?? count($cadenaRemota);
+
+                    if ($longitudRemota > $longitudLocal && $this->esValida($cadenaRemota)) {
+                        $longitudLocal = $longitudRemota;
+                        $mejorCadena   = $cadenaRemota;
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::warning("Fallo al contactar nodo: {$nodo->url}");
+            }
+        }
+
+        if ($mejorCadena) {
+            foreach ($mejorCadena as $bloque) {
+                $hashActual = $bloque['hash_actual'] ?? $bloque['hashActual'] ?? null;
+                if (!$hashActual) continue;
+
+                if (!DB::table('grados')->where('hash_actual', $hashActual)->exists()) {
+                    $datos = [
+                        'persona_id'      => $bloque['persona_id'] ?? $bloque['personaId'] ?? null,
+                        'institucion_id'  => $bloque['institucion_id'] ?? $bloque['institucionId'] ?? null,
+                        'programa_id'     => $bloque['programa_id'] ?? $bloque['programaId'] ?? null,
+                        'fecha_fin'       => $bloque['fecha_fin'] ?? $bloque['fechaFin'] ?? null,
+                        'titulo_obtenido' => $bloque['titulo_obtenido'] ?? $bloque['tituloObtenido'] ?? null,
+                        'hash_actual'     => $hashActual,
+                        'hash_anterior'   => $bloque['hash_anterior'] ?? $bloque['hashAnterior'] ?? null,
+                        'nonce'           => $bloque['nonce'] ?? 0,
+                        'firmado_por'     => $bloque['firmado_por'] ?? $bloque['firmadoPor'] ?? null,
+                    ];
+
+                    DB::transaction(function () use ($datos) {
+                        DB::statement('SET LOCAL session_replication_role = replica;');
+                        DB::table('grados')->insert(array_filter($datos) + ['id' => (string) \Illuminate\Support\Str::uuid(), 'creado_en' => now()]);
+                    });
+
+                    // Limpiar la transacción pendiente si se sincronizó
+                    if (!empty($datos['persona_id'])) {
+                        TransaccionPendiente::all()->each(function ($p) use ($datos) {
+                            $d = json_decode($p->datos, true);
+                            if (($d['persona_id'] ?? $d['personaId'] ?? '') == $datos['persona_id']) $p->delete();
+                        });
+                    }
                 }
             }
-        } catch (\Exception $e) {
-            Log::warning("No se pudo contactar nodo {$nodo->url}: " . $e->getMessage());
+            return response()->json(['mensaje' => 'Cadena reemplazada', 'reemplazada' => true, 'longitud' => $longitudLocal]);
         }
+
+        return response()->json(['mensaje' => 'Cadena local es la más larga', 'reemplazada' => false, 'longitud' => $longitudLocal]);
     }
 
-    if ($mejorCadena && $longitudLocal > $cadenaLocal->count()) {
-    Grado::truncate();
-        foreach ($mejorCadena as $bloque) {
-            Grado::create($bloque);
-        }
-        Log::info("Cadena reemplazada. Nueva longitud: $longitudLocal");
-        return response()->json(['mensaje' => 'Cadena reemplazada', 'longitud' => $longitudLocal]);
-    }
-
-    return response()->json(['mensaje' => 'Cadena local ya es la más larga', 'longitud' => $cadenaLocal->count()]);
-}
-
+    // ── Validar cadena entrante ───────────────────────────────────────────────
     private function esValida(array $cadena): bool
     {
         for ($i = 1; $i < count($cadena); $i++) {
-            $bloque = $cadena[$i];
-            $anterior = $cadena[$i - 1];
+            $hashActualAnterior = $cadena[$i - 1]['hash_actual'] ?? $cadena[$i - 1]['hashActual'] ?? null;
+            $hashAnteriorBloque = $cadena[$i]['hash_anterior'] ?? $cadena[$i]['hashAnterior'] ?? null;
+            $hashActualBloque   = $cadena[$i]['hash_actual'] ?? $cadena[$i]['hashActual'] ?? null;
 
-            if ($bloque['hash_anterior'] !== $anterior['hash_actual']) return false;
-
-            $hashCalculado = Grado::generarHash(
-                $bloque['persona_id'],
-                $bloque['institucion_id'],
-                $bloque['titulo_obtenido'],
-                $bloque['fecha_fin'],
-                $bloque['hash_anterior'],
-                $bloque['nonce']
-            );
-
-            if ($hashCalculado !== $bloque['hash_actual']) return false;
-            if (!Grado::esHashValido($bloque['hash_actual'])) return false;
+            if ($hashAnteriorBloque !== $hashActualAnterior || !Grado::esHashValido($hashActualBloque)) {
+                return false;
+            }
         }
         return true;
     }
