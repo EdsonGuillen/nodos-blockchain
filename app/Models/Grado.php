@@ -31,9 +31,10 @@ class Grado extends Model
     ];
 
     protected $casts = [
-    'fecha_fin'    => 'date:Y-m-d',
-    'fecha_inicio' => 'date:Y-m-d',
-];
+        'fecha_fin'    => 'date:Y-m-d',
+        'fecha_inicio' => 'date:Y-m-d',
+    ];
+
     // Genera UUID automáticamente al crear
     protected static function booted(): void
     {
@@ -47,26 +48,33 @@ class Grado extends Model
     // ── Métodos blockchain ────────────────────────────────────────────────────
 
     /**
-     * Genera el hash SHA256 de un bloque usando la fórmula acordada en el examen:
-     * SHA256(persona_id + institucion_id + titulo_obtenido + fecha_fin + hash_anterior + nonce)
+     * Genera el hash SHA256 con la fórmula que coincide EXACTAMENTE con Express:
+     *
+     *   `${persona_id}${institucion_id}${titulo_obtenido}${fecha_fin}${hash_anterior}${nonce}`
+     *
+     * CORRECCIÓN CLAVE: cuando hash_anterior es null, JavaScript template literals
+     * producen el string "null", no string vacío.
+     * PHP debe hacer lo mismo: usar "null" (no '').
      */
-    
-public static function generarHash(
-    string $personaId,
-    string $institucionId,
-    string $titulo,
-    string $fechaFin,
-    ?string $hashAnterior,
-    int $nonce
-): string {
-    // "null" como string igual que Express
-    $hashPrevio = $hashAnterior ?? 'null';
-    $data = $personaId . $institucionId . $titulo . $fechaFin . $hashPrevio . $nonce;
-    return hash('sha256', $data);
-}
+    public static function generarHash(
+        string $personaId,
+        string $institucionId,
+        string $titulo,
+        string $fechaFin,
+        ?string $hashAnterior,
+        int $nonce
+    ): string {
+        // JS:  ${null}  →  "null"   (string literal "null")
+        // PHP: ?? ''    →  ""       (string vacío) ← esto causaba el mismatch
+        // FIX: ?? 'null' →  "null"  (igual que JS)
+        $hashPrevio = $hashAnterior ?? 'null';
+
+        $data = $personaId . $institucionId . $titulo . $fechaFin . $hashPrevio . $nonce;
+        return hash('sha256', $data);
+    }
+
     /**
-     * Verifica que el hash cumpla la dificultad de Proof of Work.
-     * La dificultad por defecto es 3 (hash empieza con "000").
+     * Verifica que el hash cumple la dificultad de Proof of Work.
      */
     public static function esHashValido(string $hash, int $dificultad = 3): bool
     {
@@ -74,22 +82,27 @@ public static function generarHash(
     }
 
     /**
-     * Ejecuta el algoritmo Proof of Work:
-     * incrementa el nonce hasta encontrar un hash que cumpla la dificultad.
+     * Ejecuta el algoritmo Proof of Work.
+     * Usa generarHash() internamente para garantizar consistencia con Express.
      *
      * @return array{ hash: string, nonce: int }
      */
     public static function minar($personaId, $institucionId, $tituloObtenido, $fechaFin, $hashAnterior = null)
-{
-    $nonce = 0;
-    // Si $hashAnterior es null, usa un string vacío para la concatenación
-    $datosBase = $personaId . $institucionId . $tituloObtenido . $fechaFin . ($hashAnterior ?? '');
+    {
+        $nonce = 0;
 
-    do {
-        $nonce++;
-        $hash = hash('sha256', $datosBase . $nonce);
-    } while (!str_starts_with($hash, '000')); // Los 3 ceros de la rúbrica
+        do {
+            $nonce++;
+            $hash = self::generarHash(
+                (string) $personaId,
+                (string) $institucionId,
+                (string) $tituloObtenido,
+                (string) $fechaFin,
+                $hashAnterior,
+                $nonce
+            );
+        } while (!str_starts_with($hash, '000'));
 
-    return ['hash' => $hash, 'nonce' => $nonce];
-}
+        return ['hash' => $hash, 'nonce' => $nonce];
+    }
 }
